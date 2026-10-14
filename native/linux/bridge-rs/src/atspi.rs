@@ -22,7 +22,7 @@ const COMPONENT: &str = "org.a11y.atspi.Component";
 const ACTION: &str = "org.a11y.atspi.Action";
 const MAX_ATSPI_ACTIONS: usize = 64;
 const EDITABLE_TEXT: &str = "org.a11y.atspi.EditableText";
-const TEXT: &str = "org.a11y.atspi.Text";
+pub const TEXT: &str = "org.a11y.atspi.Text";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AccessibleRef {
