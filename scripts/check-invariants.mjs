@@ -216,6 +216,9 @@ check("INV-16 clean headless contract and non-destructive helper install", () =>
 	assert(setupHelper.includes("pi-computer-use Local Signing (com.injaneity.pi-computer-use)"), "stable bundle-specific local signing identity is missing");
 	assert(macosHelperPath.includes("PI_COMPUTER_USE_HELPER_APP_PATH"), "helper installer lacks an isolated test destination");
 	assert(setupHelper.includes("resolveMacosHelperAppPath"), "helper installer bypasses shared macOS path resolution");
+	assert(swift.includes("Action requires synthesized pointer input, which strict headless mode prohibits"), "macOS strict headless can fall back to synthesized pointer input");
+	assert(swift.includes("Typing requires synthesized keyboard input, which strict headless mode prohibits") && swift.includes("Keypress requires synthesized keyboard input, which strict headless mode prohibits"), "macOS strict headless can post synthesized keyboard input");
+	assert(swift.includes("Web text replacement requires synthesized keyboard input, which strict headless mode prohibits"), "macOS strict headless can synthesize web text replacement");
 });
 
 check("INV-17 macOS agent cursor stays native, configurable, and background-only", () => {

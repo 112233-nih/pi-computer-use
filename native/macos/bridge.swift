@@ -1909,6 +1909,9 @@ final class Bridge {
 			}
 		}
 		defer { if holdsPhysicalInput { physicalInputLock.unlock() } }
+		func rejectInStrictHeadless(_ message: String) throws {
+			if policy == "ax_only" { throw BridgeFailure(message: message, code: "foreground_required") }
+		}
 		var performed: [String: Any] = ["delivery": delivery]
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
@@ -2006,6 +2009,7 @@ final class Bridge {
 		}
 
 		func executeCoordinates(_ point: CGPoint) throws {
+			try rejectInStrictHeadless("Action requires synthesized pointer input, which strict headless mode prohibits")
 			guard element != nil || record.hasImage else {
 				throw BridgeFailure(message: "Coordinate grounding is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
@@ -2079,6 +2083,7 @@ final class Bridge {
 		} else if let element, action == "setText" {
 			let text = params["text"] as? String ?? ""
 			if hasAncestorRole(element, role: "AXWebArea") {
+				try rejectInStrictHeadless("Web text replacement requires synthesized keyboard input, which strict headless mode prohibits")
 				acquirePhysicalInputIfNeeded()
 				focusTargetForPhysicalInput()
 				_ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
@@ -2117,6 +2122,7 @@ final class Bridge {
 			}
 			try executeCoordinates(coordinatePoint())
 		} else if action == "typeText" {
+			try rejectInStrictHeadless("Typing requires synthesized keyboard input, which strict headless mode prohibits")
 			let preserveFocus = params["preserveFocus"] as? Bool ?? false
 			if let element {
 				let focused = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
@@ -2134,6 +2140,7 @@ final class Bridge {
 				return finish(["outcome": changed ? "worked" : "didnt", "performed": performed, "evidence": ["value": afterValue, "valueChanged": changed]])
 			}
 		} else if action == "keypress" {
+			try rejectInStrictHeadless("Keypress requires synthesized keyboard input, which strict headless mode prohibits")
 			let preserveFocus = params["preserveFocus"] as? Bool ?? false
 			guard let keys = params["keys"] as? [String], !keys.isEmpty else {
 				throw BridgeFailure(message: "keypress requires keys", code: "invalid_args")
