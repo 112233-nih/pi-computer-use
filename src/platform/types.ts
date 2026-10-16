@@ -128,10 +128,16 @@ export interface HelperActResult {
 	stoppedAt?: number;
 }
 
+/**
+ * Native root identity. `windowId` is a CoreGraphics-style id and is omitted (never `0`) when the
+ * root has no capturable window. `rootRef` and `windowRef` are two spellings of the same native
+ * root reference; backends normalize them with `normalizeTarget`.
+ */
 export interface PlatformTarget {
 	pid?: number;
 	windowId?: number;
 	rootRef?: string;
+	windowRef?: string;
 }
 
 export interface PlatformObserveRequest {

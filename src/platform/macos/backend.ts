@@ -64,6 +64,16 @@ function parseRoots(result: unknown): PlatformRoot[] {
 	});
 }
 
+export function normalizeTarget<T extends PlatformTarget>(target: T): Omit<T, "rootRef" | "windowRef" | "windowId"> & { windowId?: number; windowRef?: string } {
+	const { rootRef, windowRef, windowId, ...rest } = target;
+	const ref = windowRef ?? rootRef;
+	return {
+		...rest,
+		...(typeof windowId === "number" && Number.isFinite(windowId) && windowId > 0 ? { windowId: Math.trunc(windowId) } : {}),
+		...(ref ? { windowRef: ref } : {}),
+	};
+}
+
 function helperAction(request: PlatformActRequest): Record<string, unknown> {
 	if (!("focus" in request.target)) return { ...request };
 	return { ...request, target: request.target.focus, params: { ...request.params, preserveFocus: true } };
@@ -97,14 +107,13 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 	},
 
 	async focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult> {
-		return await macosHelper.command<PlatformFocusWindowResult>("focusWindow", { ...target }, { signal });
+		return await macosHelper.command<PlatformFocusWindowResult>("focusWindow", normalizeTarget(target), { signal });
 	},
 
 	async observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse> {
 		return parseLookResponse(await macosHelper.command("look", {
 			baseLookId: request.baseLookId,
-			windowId: request.target.windowId,
-			windowRef: request.target.rootRef,
+			...normalizeTarget(request.target),
 			maxDimension: request.maxDimension,
 			readText: request.readText,
 			scopeRef: request.scopeRef,
@@ -126,6 +135,6 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 	},
 
 	async waitFor(args: PlatformWaitForRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformWaitForResponse> {
-		return await macosHelper.command("axWaitFor", { ...args }, options);
+		return await macosHelper.command("axWaitFor", normalizeTarget(args), options);
 	},
 };

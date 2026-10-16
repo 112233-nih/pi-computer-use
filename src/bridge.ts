@@ -124,6 +124,8 @@ interface ComputerUseDetails {
 interface TerminalDesktopActionDetails {
 	tool: "act_ui";
 	status: "target_closed" | "post_action_observation_failed";
+	cause?: "replaced" | "closed";
+	successors?: Array<{ ref?: string; kind: string; title?: string; isModal?: boolean }>;
 	baseStateId: string;
 	target: {
 		app: string;
@@ -308,6 +310,7 @@ const runtimeState: RuntimeState = {
 };
 
 const savedStates = new SavedStates();
+export const testing = { runInOperation: <T>(fn: () => T): T => savedStates.operations.run({}, fn) };
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -760,8 +763,12 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 	return { ...baseTarget, windowRef: storeWindowRefForAppWindow(app, window).ref };
 }
 
-function nativeWindowRequest(target: Pick<CurrentTarget, "pid" | "windowId" | "nativeWindowRef">): { pid: number; windowId: number; windowRef?: string } {
-	return { pid: target.pid, windowId: target.windowId, windowRef: target.nativeWindowRef };
+export function nativeWindowRequest(target: Pick<CurrentTarget, "pid" | "windowId" | "nativeWindowRef">): { pid: number; windowId?: number; rootRef?: string; windowRef?: string } {
+	return {
+		pid: target.pid,
+		...(target.windowId > 0 ? { windowId: target.windowId } : {}),
+		...(target.nativeWindowRef ? { rootRef: target.nativeWindowRef, windowRef: target.nativeWindowRef } : {}),
+	};
 }
 
 function setCurrentTarget(target: ResolvedTarget): void {
@@ -846,7 +853,7 @@ async function resolveTargetByWindowSelector(selector: RootSelector, signal?: Ab
 	return resolved;
 }
 
-async function resolveCurrentTarget(signal?: AbortSignal): Promise<ResolvedTarget> {
+async function resolveCurrentTarget(signal?: AbortSignal, options: { preferModal?: boolean } = {}): Promise<ResolvedTarget> {
 	const current = currentTargetOrThrow();
 	const windows = await listWindows(current.pid, signal);
 	if (!windows.length) {
@@ -879,7 +886,7 @@ async function resolveCurrentTarget(signal?: AbortSignal): Promise<ResolvedTarge
 		throw new Error(CURRENT_TARGET_GONE_ERROR);
 	}
 
-	const modal = windows
+	const modal = options.preferModal === false ? undefined : windows
 		.filter((window) => shouldPreferForegroundModalWindow(match!, window))
 		.sort((a, b) => scoreWindow(b) - scoreWindow(a))[0];
 	if (modal) match = modal;
@@ -1842,7 +1849,7 @@ function clearDesktopOperationState(state: OperationState): void {
 	state.currentNote = undefined;
 }
 
-async function terminalDesktopActionResult(
+export async function terminalDesktopActionResult(
 	target: ResolvedTarget,
 	baseStateId: string,
 	execution: ExecutionTrace,
@@ -1892,9 +1899,14 @@ async function terminalDesktopActionResult(
 			};
 		}
 	}
+	const successors = targetClosed
+		? (execution.rootDelta ?? []).filter((delta) => delta.change === "appeared" && delta.pid === target.pid).map((delta) => ({ ref: delta.ref, kind: delta.kind, title: delta.title, isModal: delta.isModal }))
+		: [];
 	const status = targetClosed ? "target_closed" : "post_action_observation_failed";
-	const code = targetClosed ? "target_closed" : "post_action_observation_failed";
-	const message = error instanceof Error ? error.message : String(error);
+	const rawMessage = error instanceof Error ? error.message : String(error);
+	const rootExpired = !targetClosed && /Root is not (available through Accessibility|owned by a running app)|root_not_found/.test(rawMessage);
+	const code = targetClosed ? "target_closed" : rootExpired ? "root_stale" : "post_action_observation_failed";
+	const message = rootExpired ? `Root expired or was never valid for observation (${rawMessage}). Rediscover with find_roots.` : rawMessage;
 	clearDesktopOperationState(operationState());
 	const details: TerminalDesktopActionDetails = {
 		tool: "act_ui",
@@ -1911,9 +1923,11 @@ async function terminalDesktopActionResult(
 		},
 		execution,
 		error: { code, message },
+		...(targetClosed ? { cause: successors.length > 0 ? "replaced" as const : "closed" as const, successors } : {}),
 	};
+	const successorText = successors.length > 0 ? ` It was replaced by ${successors.map((item) => `${item.kind} ${JSON.stringify(item.title ?? "")}${item.isModal ? " (modal)" : ""}`).join(", ")}.` : "";
 	const result = targetClosed
-		? `The action was delivered, and its source root ${target.appName} — ${target.windowTitle} closed before a successor observation could be captured.`
+		? `The action was delivered, and its source root ${target.appName} — ${target.windowTitle} closed before a successor observation could be captured.${successorText}`
 		: `The action was delivered, but its source root ${target.appName} — ${target.windowTitle} could not be observed afterward: ${message}`;
 	return {
 		content: [{ type: "text", text: `${result}\nNo successor state was created. Call find_roots, then observe_ui to continue.` }],
@@ -1929,7 +1943,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
 	const scopeNode = condition ? conditionScopeNode(look.parsedOutline!, condition) : undefined;
-	const target = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
+	const target = await ensureTargetWindowId(await resolveCurrentTarget(signal, { preferModal: false }), signal);
 	const noteBefore = state.currentNote;
 	return await withWindowWriteLock(target, async () => {
 		const headless = getComputerUseConfig().headless;

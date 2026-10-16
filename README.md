@@ -75,6 +75,7 @@ See [docs/usage.md](./docs/usage.md) for the full tool reference.
 
 ## Documentation
 
+- [macOS root targeting](docs/macos-root-targeting.md)
 - [Usage](./docs/usage.md)
 - [Architecture](./docs/architecture.md)
 - [Configuration](./docs/configuration.md)
