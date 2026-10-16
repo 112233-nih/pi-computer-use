@@ -3669,3 +3669,300 @@ struct PiComputerUseHelper {
 		Bridge().run()
 	}
 }
+
+/*
+PI_DOCS_REFERENCE_BEGIN reference/platforms/macos/accessibility
+
+This page is the direct reference for macOS Accessibility, usually abbreviated AX. The implementation lives primarily in [`native/macos/bridge.swift`](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift); the TypeScript platform adapter lives in [`src/platform/macos/`](https://github.com/injaneity/pi-computer-use/tree/main/src/platform/macos).
+
+## Trust and permission
+
+The helper checks trust with [`AXIsProcessTrusted()`](https://developer.apple.com/documentation/applicationservices/1460720-axisprocesstrusted) and requests it with [`AXIsProcessTrustedWithOptions(_:)`](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions). Accessibility permission enables semantic UI observation and AX actions; it does not grant window image capture.
+
+The grant must apply to the resolved helper app during normal operation. The helper is installed per user at `~/Applications/pi-computer-use.app` by default; existing writable system-wide installs remain at `/Applications/pi-computer-use.app`, and `PI_COMPUTER_USE_HELPER_APP_PATH` selects an explicit location for development or testing. Setup requests trust before opening System Settings and restarts the helper after recheck. Pane names and listing behavior vary by macOS release, so they are not part of the runtime contract.
+
+## AX root discovery
+
+Root discovery combines several APIs rather than treating AX as a window registry:
+
+1. [`NSWorkspace.runningApplications`](https://developer.apple.com/documentation/appkit/nsworkspace/runningapplications) supplies process identity and frontmost state.
+2. [`AXUIElementCreateApplication`](https://developer.apple.com/documentation/applicationservices/axuielement) creates an application-level AX element for each candidate process.
+3. AX window attributes provide controllable windows, roles, frames, state, and child trees. When an app reports an empty `AXWindows` list, the helper falls back to its `AXMainWindow` and `AXFocusedWindow`.
+4. Core Graphics window data is paired separately to provide capture IDs and visual ordering.
+
+Windows, sheets, dialogs, popovers, and open menus can become roots. Menus use the `AXMenu` role when an AX element is available. A visually discovered menu without a matching AX element is returned as `pictureOnly`, so it cannot receive ref-targeted AX actions. An AX root without a matching Core Graphics window is unpaired; the [root targeting reference](./root-targeting.mdx) defines how such roots are addressed and observed.
+
+## Tree extraction
+
+An observation walks the selected AX subtree breadth-first. It reads available roles, subroles, identifiers, titles, descriptions, values, frames, focus state, supported actions, and settable attributes. The native walk stops at 2,000 nodes or 20 seconds; incomplete ancestors are marked `truncated` rather than presented as complete.
+
+The resulting outline preserves native semantics where they are available. It does not infer that every visible control has an AX node. Web views, custom drawing, games, and apps with incomplete accessibility implementations can expose sparse trees.
+
+## Semantic operations
+
+The helper prefers AX operations before synthesized input:
+
+- press and eligible click actions call [`AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction) with `AXPress`;
+- `setText` writes `AXValue` through [`AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue) and reads the value back;
+- semantic scrolling walks the target and its ancestors for supported AX scroll actions;
+- foreground coordinate delivery uses `AXUIElementCopyElementAtPosition` as an occlusion preflight.
+
+An advertised AX action is a delivery capability, not proof of an application-level result. Action outcomes remain `worked`, `didnt`, or `unknown` based on read-back or observable state evidence.
+
+## Strict headless behavior
+
+`headless: true` maps native actions to the `ax_only` policy. AX press, `AXValue` writes outside web content, and semantic scrolling still run. Actions that would fall back to synthesized pointer input, every `typeText` and `keypress`, and web text replacement fail with `foreground_required` before the helper posts events or activates the target. The agent cursor overlay and activity glow are not shown.
+
+## Common interpretation rules
+
+- An empty outline usually indicates missing Accessibility trust, an inaccessible target, or an app that exposes no useful AX hierarchy.
+- `truncated` means the bounded walk did not retrieve the complete descendant tree.
+- `pictureOnly` means the element came from visual evidence and cannot be targeted by AX ref.
+- A supported action describes what the element reports, not whether the app will honor it.
+- AX frames and Core Graphics windows are paired heuristically; low-confidence pairing must not be treated as exact identity.
+
+For the image side of an observation, continue to [Capture and OCR](./capture.mdx). For fallback delivery and checked outcomes, continue to [Actions and input delivery](./actions.mdx). The [complete implementation reference](./implementation.mdx) contains line-level source citations and current limits.
+PI_DOCS_REFERENCE_END
+*/
+
+/*
+PI_DOCS_REFERENCE_BEGIN reference/platforms/macos/capture
+
+macOS image evidence is separate from Accessibility. A target can have a complete AX outline while capture fails, or a valid image while its AX tree is sparse.
+
+## Screen Recording permission
+
+The helper preflights Screen Recording with [`CGPreflightScreenCaptureAccess()`](https://developer.apple.com/documentation/coregraphics/cgpreflightscreencaptureaccess%28%29) and requests it with [`CGRequestScreenCaptureAccess()`](https://developer.apple.com/documentation/coregraphics/cgrequestscreencaptureaccess%28%29). It additionally requires a nonempty [`SCShareableContent`](https://developer.apple.com/documentation/screencapturekit/scshareablecontent) query before reporting capture readiness.
+
+That content query is a project readiness check, not an Apple-defined permission-status API. Passing it does not guarantee that every later window capture will succeed.
+
+## Window identity and pairing
+
+[`CGWindowListCopyWindowInfo`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo%28_%3A_%3A%29) supplies window IDs, owner PIDs, bounds, layers, titles, onscreen state, and ordering candidates. AX windows do not expose the same project-owned identifier, so the helper pairs AX and Core Graphics windows using title, geometry, onscreen state, and one-to-one assignment.
+
+Pairing metadata reports `exact`, `high`, or `low` confidence. A low-confidence match is useful evidence but is not guaranteed identity. A root with no matching Core Graphics window is unpaired and has no `windowId`.
+
+## ScreenCaptureKit path
+
+For a requested image, the helper:
+
+1. retrieves the matching `SCWindow` from `SCShareableContent`;
+2. creates an `SCContentFilter` for that desktop-independent window;
+3. disables cursor rendering and ignores single-window shadows;
+4. captures one frame with [`SCScreenshotManager.captureImage`](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager/captureimage%28contentfilter%3Aconfiguration%3Acompletionhandler%3A%29).
+
+`SCScreenshotManager` requires macOS 14, which is why the helper's deployment target is macOS 14 or newer.
+
+Visual observation of an unpaired root fails with `root_not_capturable`; use semantic observation (`image: never`). No other window is captured in its place.
+
+## Fallback capture
+
+If ScreenCaptureKit times out or fails, the helper invokes `/usr/sbin/screencapture -x -l <window-id>` and reads an owner-only temporary PNG. This is a fallback implementation detail, not a guarantee that capture will work after a ScreenCaptureKit failure.
+
+## OCR and picture-only nodes
+
+Forced visual observation runs Vision's accurate [`VNRecognizeTextRequest`](https://developer.apple.com/documentation/vision/vnrecognizetextrequest), with language correction disabled. Nonduplicate recognized text boxes are attached to the outline.
+
+OCR-derived nodes are marked `pictureOnly`. They can provide text and geometry evidence, but ref-targeted Accessibility actions are blocked because no corresponding AX element exists. A coordinate action can use visual evidence only when the saved observation includes the required image geometry.
+
+## Failure boundaries
+
+- A successful permission readiness check does not guarantee capture of every window.
+- Protected, remote, transient, or rapidly closing surfaces may not produce an image.
+- AX-to-Core-Graphics pairing can be uncertain, and unpaired roots are never capturable.
+- OCR recognizes pixels, not control semantics.
+- Outline-only menu roots cannot be coordinate targets without image geometry.
+
+For semantic UI structure, use [Accessibility and AX](./accessibility.mdx). For coordinate delivery and outcome evidence, use [Actions and input delivery](./actions.mdx).
+PI_DOCS_REFERENCE_END
+*/
+
+/*
+PI_DOCS_REFERENCE_BEGIN reference/platforms/macos/actions
+
+Action delivery is divided between model-level coordination in [`src/bridge.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/bridge.ts) and native grounding, delivery, and verification in [`native/macos/bridge.swift`](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift).
+
+## Delivery order
+
+Ref-based actions prefer the least disruptive credible strategy:
+
+1. use a supported semantic AX operation;
+2. use background event delivery when semantic delivery is unavailable and policy permits it;
+3. request foreground delivery only when the action requires focus or a checked background attempt proves it had no effect.
+
+Coordinate clicks and focus-dependent steps can begin in the foreground. Ambiguous pointer outcomes are not replayed because repeating an uncertain click can duplicate a side effect.
+
+Actions and the successor capture stay on the root the state belongs to; `act_ui` does not redirect to a foreground modal. A modal that appears afterwards is reported in `rootDelta` as `appeared`.
+
+## AX delivery
+
+Eligible presses use `AXPress`, text replacement writes `AXValue`, and semantic scrolling searches the target and ancestor chain for AX scroll actions. These paths are described in [Accessibility and AX](./accessibility.mdx).
+
+## Synthesized delivery
+
+Web-backed editable controls and controls without usable AX actions can require synthesized keyboard or pointer events. Background events use [`CGEvent.postToPid(_:)`](https://developer.apple.com/documentation/coregraphics/cgevent/posttopid%28_%3A%29). Foreground delivery activates and raises the target before posting at the [CG event tap](https://developer.apple.com/documentation/coregraphics/cgevent/post%28tap%3A%29).
+
+These are synthesized events, not physical hardware input. Before foreground coordinate delivery, the helper hit-tests the intended point with AX. An unrelated resolved element produces `occluded_target`; an unavailable or coarse result remains unknown rather than proving visibility.
+
+## Headless policy
+
+`headless: true` is a strict prohibition, not a preference. It maps the transaction to the native `ax_only` policy. The helper fails these actions with `foreground_required` before it posts events or activates the target:
+
+- coordinate delivery: raw `x`/`y` targets, `moveMouse`, `drag`, and press, click, `setText`, or scroll requests whose Accessibility operation is unavailable or fails;
+- `typeText` and `keypress`, including ref-targeted requests;
+- `setText` inside web content, which needs synthesized keyboard input.
+
+The bridge returns that error instead of retrying in the foreground. `ax_only` actions never display the agent cursor overlay.
+
+Without strict headless mode, ref-based work normally starts in the background and can escalate only through checked fallback rules.
+
+## Outcome evidence
+
+Native results distinguish:
+
+- `worked`: observable evidence supports the intended effect;
+- `didnt`: checked evidence supports that the intended effect did not occur;
+- `unknown`: delivery happened, but available evidence cannot prove the application-level result.
+
+Text writes and text entry can use read-back evidence. Pointer actions often need value, selection, focused-window, sheet, or root-delta changes; a successfully posted event alone is not universal proof. When the source root disappears after delivery, the result reports `target_closed` with its cause, as described in the [root targeting reference](./root-targeting.mdx#post-action-outcomes).
+
+## Agent cursor overlay
+
+When `cursor_overlay` is enabled, non-headless pointer actions delivered in the background with `postToPid` schedule the noninteractive AppKit/SwiftUI agent cursor at the grounded point. Foreground actions that control the physical cursor don't display the overlay. The overlay ignores mouse events, cannot become key or main, and hides automatically. It is visual only and currently limited to the main display.
+
+For state ownership, batching, and successor observations, use the generated [agent state and action contract](../../agent/contract.mdx). For line-level implementation citations and every current limit, use the [complete macOS implementation reference](./implementation.mdx).
+PI_DOCS_REFERENCE_END
+*/
+
+/*
+PI_DOCS_REFERENCE_BEGIN reference/platforms/macos/root-targeting
+
+These are the target, capture, modality, and post-action contracts the macOS path guarantees.
+
+## Target contract
+
+- A root target is `{ pid, windowId?, rootRef?, windowRef? }`. `windowId` is present only when positive. An unpaired root (no matching CG window) has no `windowId`, never `0`.
+- `rootRef` and `windowRef` are the same native ref. Every macOS helper call (`look`, `focusWindow`, `axWaitFor`) goes through `normalizeTarget()` in [`src/platform/macos/backend.ts`](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/backend.ts), which sends only `windowRef`.
+- The helper treats `windowId <= 0` as absent. A `windowRef` that no longer resolves fails; it never falls back to the app's first window.
+- Looks remember their `windowRef`, so `act` resolves the root by ref for unpaired roots.
+
+## Capture
+
+- Paired root: semantic and visual observation work.
+- Unpaired root: semantic works. Visual fails with `root_not_capturable`; use `image: never`. No other window is ever captured in its place.
+
+## Modality
+
+`isModal` is true for: a sheet child, role `AXSheet`, or `AXModal == true`. When the app does not report `AXModal` at all, a dialog-like role/subrole still counts. An explicit `AXModal == false` wins: Fusion's BROWSER sidebar (subrole `AXDialog`, `AXModal=0`) is nonmodal.
+
+`act_ui` no longer redirects to a foreground modal. Actions and the successor capture stay on the root the state belongs to; a modal that appears afterwards shows up in `rootDelta` as `appeared`. `observe_ui` without a root may still prefer a confirmed foreground modal.
+
+## Post-action outcomes
+
+Terminal `act_ui` results always say the action was delivered, and:
+
+- `target_closed`, `cause: replaced`, `successors: [...]`: source root gone and new roots of the same pid appeared. Observe a successor via `find_roots`.
+- `target_closed`, `cause: closed`: source root gone, nothing replaced it.
+- `post_action_observation_failed` with code `root_stale`: root still listed or unknown but the ref no longer resolves. Rediscover with `find_roots`.
+
+## Ref lifecycle
+
+Native refs live in the helper's `refStore` and are only valid while the helper process and the AX element live. Refs from earlier sessions, pids and state ids are stale: rediscover with `find_roots`.
+
+## Tests
+
+`npm run test:macos-target`, `test:macos-native` (compiles the `PURE` region of `bridge.swift`), `test:act-outcomes`.
+PI_DOCS_REFERENCE_END
+*/
+
+/*
+PI_DOCS_REFERENCE_BEGIN reference/platforms/macos/implementation
+
+This page describes the current macOS implementation, not an intended design. Apple links establish the platform API semantics; source links establish what this project actually does.
+
+For focused lookup, use [Accessibility and AX](./accessibility.mdx), [Capture and OCR](./capture.mdx), [Actions and input delivery](./actions.mdx), or [Root targeting](./root-targeting.mdx). This complete page remains the source-backed inventory of requirements, helper behavior, and current limits.
+
+## Support boundary
+
+The helper requires macOS 14 or newer because it is compiled with a `14.0` deployment target and uses `SCScreenshotManager`, which Apple introduced in macOS 14 ([Apple: `SCScreenshotManager`](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager), [setup-helper.mjs](https://github.com/injaneity/pi-computer-use/blob/main/scripts/setup-helper.mjs#L46), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3177)). Builds target Apple silicon and Intel (`arm64` and `x86_64`) ([setup-helper.mjs](https://github.com/injaneity/pi-computer-use/blob/main/scripts/setup-helper.mjs#L42)).
+
+The normal runtime uses the per-user `~/Applications/pi-computer-use.app`; existing writable system-wide installs remain at `/Applications/pi-computer-use.app`, and `PI_COMPUTER_USE_HELPER_APP_PATH` selects an explicit location ([helper-path.mjs](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/helper-path.mjs#L15)). The bundle identifier is `com.injaneity.pi-computer-use`, and the daemon listens on a Unix-domain socket below `~/Library/Caches/pi-computer-use/`. The TypeScript client launches the resolved app with `open -n -g <app> --args serve …` and communicates with its daemon over that socket ([helper.ts](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/helper.ts#L19), [helper.ts](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/helper.ts#L169)). The app is an `LSUIElement`, so it is packaged as an agent-style app rather than a normal Dock app ([setup-helper.mjs](https://github.com/injaneity/pi-computer-use/blob/main/scripts/setup-helper.mjs#L405)).
+
+## Permissions
+
+Two grants are required for the complete feature set:
+
+- Accessibility is checked with `AXIsProcessTrusted()` and requested with `AXIsProcessTrustedWithOptions(_:)` ([Apple: `AXIsProcessTrusted`](https://developer.apple.com/documentation/applicationservices/1460720-axisprocesstrusted), [Apple: `AXIsProcessTrustedWithOptions`](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L872)). It enables Accessibility API observation and actions.
+- Screen Recording is preflighted and requested with `CGPreflightScreenCaptureAccess()` and `CGRequestScreenCaptureAccess()` ([Apple: preflight](https://developer.apple.com/documentation/coregraphics/cgpreflightscreencaptureaccess%28%29), [Apple: request](https://developer.apple.com/documentation/coregraphics/cgrequestscreencaptureaccess%28%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L872)). It enables window image capture.
+
+The extension reports Screen Recording as ready only when the helper can also retrieve nonempty display content through `SCShareableContent`. Apple documents that API as retrieving matching displays, apps, and windows; the project uses it as an additional readiness check, not as an Apple-defined permission-status API ([Apple: `getExcludingDesktopWindows`](https://developer.apple.com/documentation/screencapturekit/scshareablecontent/getexcludingdesktopwindows%28_%3Aonscreenwindowsonly%3Acompletionhandler%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L812)).
+
+Setup invokes the request APIs before opening the relevant System Settings pane, then restarts the helper after the user chooses recheck ([permissions.ts](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/permissions.ts#L82), [permissions.ts](https://github.com/injaneity/pi-computer-use/blob/main/src/platform/macos/permissions.ts#L136)). The helper reports `source.attribution: helper-app` only when its executable path is inside the installed bundle and its parent PID is 1; every other launch reports `caller` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L836)). This is a project launch diagnostic, not an Apple API statement about grant ownership.
+
+The documentation does not promise a particular pane label, automatic listing behavior, or grant persistence across re-signing because those details are not stable API contracts.
+
+## Root discovery
+
+Discovery combines three sources:
+
+1. `NSWorkspace.runningApplications` supplies running-process identity and frontmost state ([Apple: `runningApplications`](https://developer.apple.com/documentation/appkit/nsworkspace/runningapplications), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L951)).
+2. `AXUIElementCreateApplication` plus Accessibility window attributes supplies controllable windows, roles, state, and element trees. An empty `AXWindows` list falls back to `AXMainWindow` and `AXFocusedWindow` ([Apple: `AXUIElement`](https://developer.apple.com/documentation/applicationservices/axuielement), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1260)).
+3. `CGWindowListCopyWindowInfo` supplies session window IDs, bounds, layers, owner PIDs, titles, onscreen state, and ordering candidates ([Apple: `CGWindowListCopyWindowInfo`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcopywindowinfo%28_%3A_%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2936)).
+
+Single-window lookups call `CGWindowListCreateDescriptionFromArray(_:)` for the requested window ID first and fall back to an all-window `CGWindowListCopyWindowInfo` query when that returns no match ([Apple: `CGWindowListCreateDescriptionFromArray`](https://developer.apple.com/documentation/coregraphics/cgwindowlistcreatedescriptionfromarray%28_%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3317)).
+
+Accessibility windows and Core Graphics windows do not share one project-owned identifier, so the helper pairs them heuristically using title, frame geometry, onscreen state, and one-to-one assignment. The returned metadata exposes `exact`, `high`, or `low` pairing confidence instead of presenting every match as certain ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3080)). Roots without a match are unpaired and omit `windowId`; the [root targeting reference](./root-targeting.mdx) defines how they are addressed.
+
+Windows, sheets, dialogs, popovers, and open menus can become roots. Menus are identified by the Accessibility `AXMenu` role and Core Graphics popup-menu window level; a menu with no matching Accessibility element remains an outline-only, `pictureOnly` root ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1232), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3004)).
+
+## Observation and capture
+
+A look walks the target Accessibility subtree breadth-first and reads roles, subroles, identifiers, titles, descriptions, values, frames, focus, actions, and settable attributes. The walk stops at 2,000 nodes or 20 seconds and marks incomplete ancestors as `truncated` ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1533)).
+
+When an image is requested, the helper:
+
+1. retrieves the matching `SCWindow` from `SCShareableContent`;
+2. builds an `SCContentFilter` for that desktop-independent window;
+3. sets `showsCursor = false` and `ignoreShadowsSingleWindow = true`;
+4. captures one frame with `SCScreenshotManager.captureImage` ([Apple: capture one image](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager/captureimage%28contentfilter%3Aconfiguration%3Acompletionhandler%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3202)).
+
+If ScreenCaptureKit times out or fails, the helper tries `/usr/sbin/screencapture -x -l <window-id>` and reads the temporary PNG with owner-only file permissions ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3277)). The fallback is an implementation detail, not a guarantee that capture succeeds when ScreenCaptureKit fails. Unpaired roots fail visual observation with `root_not_capturable` instead of capturing another window ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1367)).
+
+Forced visual text recognition uses Vision's accurate `VNRecognizeTextRequest`, disables language correction, and attaches nonduplicate text boxes to the Accessibility outline. Apple defines that request as finding and recognizing text in an image ([Apple: `VNRecognizeTextRequest`](https://developer.apple.com/documentation/vision/vnrecognizetextrequest), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1637)). OCR-only nodes are marked `pictureOnly` and cannot receive ref-targeted Accessibility actions.
+
+## Actions and delivery
+
+The helper prefers Accessibility operations where the target exposes them:
+
+- press and eligible click actions use `AXUIElementPerformAction` with `AXPress` ([Apple: `AXUIElementPerformAction`](https://developer.apple.com/documentation/applicationservices/1462091-axuielementperformaction), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2079));
+- `setText` writes `AXValue` and reads it back ([Apple: `AXUIElementSetAttributeValue`](https://developer.apple.com/documentation/applicationservices/1460434-axuielementsetattributevalue), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2093));
+- semantic scrolling walks the target and its ancestors looking for supported Accessibility scroll actions ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2467)).
+
+Web-backed editable controls and controls without a usable Accessibility action can require synthesized keyboard or pointer events. Background event delivery uses `CGEvent.postToPid(_:)`; foreground delivery activates and raises the target, then posts the synthesized event at `.cghidEventTap` ([Apple: `postToPid`](https://developer.apple.com/documentation/coregraphics/cgevent/posttopid%28_%3A%29), [Apple: `post(tap:)`](https://developer.apple.com/documentation/coregraphics/cgevent/post%28tap%3A%29), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L3362)). These are synthesized events; this documentation does not describe them as physical hardware input.
+
+`headless: true` maps every native action to the `ax_only` policy. The helper rejects coordinate delivery, `typeText`, `keypress`, and web text replacement with `foreground_required` before posting synthesized events, and the bridge does not escalate that error ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1922)). Without strict headless mode, ref-based actions normally start with background delivery; coordinate clicks and focus-dependent steps can start in foreground, while checked keyboard failures and explicit `foreground_required` errors can escalate there ([bridge.ts](https://github.com/injaneity/pi-computer-use/blob/main/src/bridge.ts#L1185), [bridge.ts](https://github.com/injaneity/pi-computer-use/blob/main/src/bridge.ts#L1208)).
+
+Before foreground coordinate delivery, the helper uses `AXUIElementCopyElementAtPosition` to check whether the point resolves to the intended element or a related ancestor or descendant. An unrelated resolved element produces `occluded_target`; an unavailable or coarse hit test produces an unknown preflight rather than proof of visibility ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2021), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2440)).
+
+Action results distinguish `worked`, `didnt`, and `unknown`. A successful API call or posted event is not universally treated as proof of application-level effect: value writes and text entry get read-back evidence, while pointer actions can remain unknown unless value, selection, focused-window, or sheet state changes ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2079), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L2197)).
+
+## Agent cursor overlay
+
+When `cursor_overlay` is enabled, non-headless pointer-oriented actions delivered in the background with `postToPid` schedule the AppKit/SwiftUI `AgentCursor` overlay at the grounded point; foreground actions that control the physical cursor and `ax_only` actions don't display it ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L1982)). The overlay ignores mouse events, cannot become key or main, and hides after eight seconds ([Apple: `ignoresMouseEvents`](https://developer.apple.com/documentation/appkit/nswindow/ignoresmouseevents), [agent_cursor.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/agent_cursor.swift#L6)). It is visual only; action delivery remains in `bridge.swift`.
+
+The current overlay is main-display-only because its frame is created from `NSScreen.main`. The helper excludes its own process from app discovery, but the overlay is not a supported target ([agent_cursor.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/agent_cursor.swift#L61), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L951)).
+
+## Activity glow
+
+`activity_glow` defaults to `false`. When it is enabled and `headless` is `false`, the extension sends `setActivityGlow` over a persistent helper connection when a computer-use tool starts and clears it when the agent run ends ([computer-use.ts](https://github.com/injaneity/pi-computer-use/blob/main/extensions/computer-use.ts#L207)). The helper's `ActivityGlowController` tracks active connections and shows the glow while any is active; a closed connection removes its state ([bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L485), [bridge.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/bridge.swift#L634), [activity_glow.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/activity_glow.swift#L74)). It creates one borderless window per `NSScreen`, rebuilt when screen parameters change. Each window ignores mouse events, is excluded from Accessibility, and sits at the screen-saver level ([activity_glow.swift](https://github.com/injaneity/pi-computer-use/blob/main/native/macos/activity_glow.swift#L130)).
+
+## Current limits
+
+- Accessibility completeness and supported actions depend on what the target app exposes; sparse or web-backed trees can require image evidence or foreground event delivery.
+- Accessibility-to-Core-Graphics window pairing is heuristic, and callers must treat low-confidence pairing accordingly. Unpaired roots support semantic observation only.
+- Raw coordinate targets require an image-bearing look; outline-only menu roots cannot be coordinate targets.
+- ScreenCaptureKit readiness, capture, and the command-line screenshot fallback are separate checks, so one successful check does not guarantee every later window capture.
+- The visual agent cursor only covers the main display.
+- Strict headless mode rejects actions that need synthesized pointer or keyboard input, including every `typeText` and `keypress`.
+PI_DOCS_REFERENCE_END
+*/

@@ -117,3 +117,110 @@ export function isHeadlessMode(): boolean {
 export function isBrowserUseEnabled(): boolean {
 	return activeConfig.browser_use;
 }
+
+/*
+PI_DOCS_REFERENCE_BEGIN reference/configuration
+
+Configuration controls browser access, strict accessibility execution, the macOS agent cursor, and the macOS activity glow.
+
+## Files
+
+Global config:
+
+```text
+~/.pi/agent/extensions/pi-computer-use.json
+```
+
+Project config:
+
+```text
+.pi/computer-use.json
+```
+
+Project config overrides global config. Environment variables override both.
+
+Example:
+
+```json
+{
+  "browser_use": true,
+  "managed_browser": "chrome",
+  "headless": false,
+  "cursor_overlay": true,
+  "activity_glow": true
+}
+```
+
+Run `/computer-use` in Pi to show the active config and its source.
+
+## Options
+
+### `browser_use`
+
+Default: `{{config-default:browser_use}}`
+
+When `false`, the extension refuses known browser windows. This is useful for projects that should not control browsers.
+
+Known browser families include Safari, Chrome and Chromium-family browsers, Firefox, Arc, Brave, Edge, Vivaldi, and Helium.
+
+### `managed_browser`
+
+Default: `{{config-default:managed_browser}}`
+
+Selects `"helium"` or `"chrome"` for `launch_browser`. The debugging port is always allocated internally and isn't part of the model-facing contract.
+
+### `headless`
+
+Default: `{{config-default:headless}}`
+
+When `true`, actions must remain in the background. Raw pointer events, raw keyboard events, foreground focus fallback, cursor takeover, the agent cursor overlay, and the activity glow are blocked. On macOS, actions that would need synthesized pointer or keyboard input, including every `typeText` and `keypress`, fail with `foreground_required` ([macOS reference](./platforms/macos/actions.mdx#headless-policy)). When `false` (the default), Pi prefers verified semantic activation when it is credible, preserves the focus established by editable clicks for dependent keyboard input, and may retry keyboard input in the foreground when a background attempt conclusively produced no value change. Ambiguous pointer actions are never replayed blindly.
+
+### `cursor_overlay`
+
+Default: `{{config-default:cursor_overlay}}`
+
+When `true`, macOS pointer actions enqueue a click-through agent cursor animation to the native grounded point during non-headless background delivery. Foreground actions that control the physical cursor don't display the overlay. The overlay doesn't move the system pointer, accept input, or delay the action. Set it to `false` for invisible automation. `headless: true` always suppresses it regardless of this setting ([macOS reference](./platforms/macos/actions.mdx#agent-cursor-overlay)).
+
+### `activity_glow`
+
+Default: `{{config-default:activity_glow}}`
+
+When `true`, macOS displays a click-through pulsing border on every screen while a Pi agent is using one of the extension's tools. The border stays visible until the agent run ends. Each Pi session owns its indicator state, so one session cannot hide another session's active indicator. The helper removes a session's state if its connection closes unexpectedly.
+
+The activity glow appears in user screen recordings, but never in the agent's own observations: helper captures always target a single window, so screen-edge overlays are not included. The glow is excluded from accessibility discovery. Other platforms ignore this setting, and `headless: true` always suppresses it ([macOS reference](./platforms/macos/implementation.mdx#activity-glow)).
+
+## Environment variables
+
+```bash
+PI_COMPUTER_USE_BROWSER_USE=0
+PI_COMPUTER_USE_BROWSER_USE=1
+PI_COMPUTER_USE_MANAGED_BROWSER=helium
+PI_COMPUTER_USE_MANAGED_BROWSER=chrome
+PI_COMPUTER_USE_CHROME_EXECUTABLE=/absolute/path/to/chrome
+PI_COMPUTER_USE_HELIUM_EXECUTABLE=/absolute/path/to/helium
+PI_COMPUTER_USE_HEADLESS=0
+PI_COMPUTER_USE_HEADLESS=1
+PI_COMPUTER_USE_CURSOR_OVERLAY=0
+PI_COMPUTER_USE_CURSOR_OVERLAY=1
+PI_COMPUTER_USE_ACTIVITY_GLOW=0
+PI_COMPUTER_USE_ACTIVITY_GLOW=1
+PI_COMPUTER_USE_DELIVERY_POLICY=default
+PI_COMPUTER_USE_DELIVERY_POLICY=foreground
+PI_COMPUTER_USE_CDP_PORT=9222
+```
+
+`PI_COMPUTER_USE_HEADLESS=1` prohibits foreground fallback. `PI_COMPUTER_USE_DELIVERY_POLICY` is a debugging input; normal policy belongs in configuration rather than individual model calls.
+
+`launch_browser` searches common platform install locations and `PATH`. Use `PI_COMPUTER_USE_CHROME_EXECUTABLE` or `PI_COMPUTER_USE_HELIUM_EXECUTABLE` for an AppImage, portable install, or any non-standard location. An explicit override is authoritative and must name an executable file.
+
+## CDP browser support
+
+`PI_COMPUTER_USE_CDP_PORT` enables Chrome DevTools Protocol support for Chromium-family browsers. Launch the browser with `--remote-debugging-port=<port>` and set this variable to the same port.
+
+Use a dedicated, non-default profile with `--user-data-dir=<directory>`. Chrome 136 and later ignore remote-debugging switches for the default data directory as a security measure. `launch_browser` already creates a temporary, separate CDP profile and binds discovery to a randomly allocated loopback port.
+
+When CDP is active, discovered pages participate in the same root and state system as desktop UI. `launch_browser` configures CDP automatically and returns an observed page state. `navigate_browser` and `evaluate_browser` accept only CDP browser-page states; native browser windows continue to use the normal desktop observe/act tools.
+
+With the variable unset, CDP is inactive.
+PI_DOCS_REFERENCE_END
+*/
