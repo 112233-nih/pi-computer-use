@@ -64,15 +64,17 @@ const findTool = defineTool({
 const observeTool = defineTool({
 	name: "observe_ui",
 	label: "Observe UI",
-	description: "Capture the current/frontmost root or one exact @r root and return a bounded UI outline.",
+	description: "Capture the current/frontmost root or one exact @r root and return a compact list of actionable @e controls plus stateId.",
 	promptSnippet: "Primary UI observation tool. Follow with search_ui, expand_ui, inspect_ui, or act_ui.",
 	promptGuidelines: [
 		"Use mode=semantic to skip OCR and images, visual to force them, and fused for automatic selection.",
 		"Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only and blocked by UI-tree-only policy.",
+		"Use search_ui for unlisted controls; expand_ui on the root ref or detail=outline for structure.",
 	],
 	parameters: Type.Object({
 		root: Type.Optional(Type.String({ description: "Exact @r ref issued by find_roots" })),
 		mode: Type.Optional(Type.Union([Type.Literal("semantic"), Type.Literal("visual"), Type.Literal("fused")], { description: "Observation mode, default fused" })),
+		detail: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("outline")], { description: "compact (default) lists actionable refs; outline returns the folded tree" })),
 	}),
 	execute: executeObserve,
 });
@@ -94,7 +96,7 @@ const searchUiTool = defineTool({
 const expandUiTool = defineTool({
 	name: "expand_ui",
 	label: "Expand UI",
-	description: "Unfold bounded local outline context for one @e ref.",
+	description: "Unfold bounded local outline context for one @e ref; use the root ref for full structure.",
 	promptSnippet: "Expand a specific ref instead of dumping unrelated UI.",
 	parameters: Type.Object({ ref: Type.String(), depth: Type.Optional(Type.Number({ minimum: 1, maximum: 8, description: "Subtree depth, default 3" })), stateId }),
 	execute: executeExpandUi,

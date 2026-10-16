@@ -6,7 +6,7 @@
 find roots → observe one root → search/expand/inspect its state → act from that state
 ```
 
-The agent still sees a multi-root forest. `find_roots` returns stable root refs (`@rN`) for desktop windows, transient surfaces, and CDP pages. Observing one root produces an immutable element tree whose refs (`@eN`) belong only to that returned `stateId`. Progressive disclosure is unchanged: the first outline is folded, while `search_ui`, `expand_ui`, and `inspect_ui` query the full stored tree.
+The agent still sees a multi-root forest. `find_roots` returns stable root refs (`@rN`) for desktop windows, transient surfaces, and CDP pages. Observing one root produces an immutable element tree whose refs (`@eN`) belong only to that returned `stateId`. Progressive disclosure is unchanged: the first view lists actionable controls, while `search_ui`, `expand_ui`, and `inspect_ui` query the full stored tree.
 
 ## Runtime model
 
@@ -58,7 +58,7 @@ Desktop scheduling is conservatively keyed by process rather than window because
 
 `observe_ui` asks the selected backend for one look. A desktop look combines root identity, accessibility structure, optional image evidence, OCR boxes when required, and capture metadata. A browser look converts the CDP accessibility tree into the same serialized outline shape.
 
-The bridge stores the complete observation and returns a folded rendering. The state owns its refs:
+The bridge stores the complete observation and returns a compact control list; `detail: "outline"` and `expand_ui` render the folded tree. The state owns its refs:
 
 ```text
 @r3 browser page
@@ -114,9 +114,9 @@ The agent-facing `act_ui.headless` flag determines whether foreground execution 
 
 ## Successor diffs
 
-Complete observations remain immutable and bounded internally. The initial observation renders a folded full view. After a mutation, `view.ts` stabilizes public refs using confident native identities, saves the complete resulting state, and compares it with the base state. Small trustworthy results render `added`, `updated`, and `removed` nodes plus the next `stateId`. Root appearance, closure, and focus changes remain part of the run result.
+Complete observations remain immutable and bounded internally. The initial observation renders the compact control list. After a mutation, `view.ts` stabilizes public refs using confident native identities, saves the complete resulting state, and compares it with the base state. Small trustworthy results render `added`, `updated`, and `removed` nodes plus the next `stateId`. Root appearance, closure, and focus changes remain part of the run result.
 
-Diff rendering falls back to a full folded view when the root identity changes, too few successor nodes can be matched confidently, or the change budget would make a patch less useful than the full view. Cached queries always operate on the complete stored state, never on a partially applied model-side tree.
+Diff rendering falls back to the compact control list when the root identity changes, too few successor nodes can be matched confidently, or the change budget would make a patch less useful than the full view. Cached queries always operate on the complete stored state, never on a partially applied model-side tree.
 
 ## Browser support
 

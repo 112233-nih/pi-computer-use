@@ -1,6 +1,7 @@
 export type RootSelector = string;
 export type ImageMode = "auto" | "always" | "never";
 export type MouseButtonName = "left" | "right" | "middle";
+export type ObserveDetail = "compact" | "outline";
 
 export interface ObserveTargetParams {
 	root?: RootSelector;
@@ -35,6 +36,7 @@ export interface EvaluateBrowserParams {
 
 export interface ObserveParams extends ObserveTargetParams {
 	mode?: "semantic" | "visual" | "fused";
+	detail?: ObserveDetail;
 	/** Internal capture override; not part of the model-facing schema. */
 	readText?: "auto" | "always" | "never";
 }

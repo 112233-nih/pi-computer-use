@@ -145,10 +145,11 @@ Check that:
 - The window was not closed between `observe_ui` and `act_ui`.
 - The app is running in a supported desktop session.
 
-If the target is ambiguous, specify the app and window title:
+If the target is ambiguous, find the exact root by app and window title, then observe it:
 
 ```ts
-observe_ui({ app: "TextEdit", windowTitle: "Untitled" })
+find_roots({ app: "TextEdit", text: "Untitled" })
+observe_ui({ root: "@r1" })
 ```
 
 ## Apple Events JavaScript is disabled

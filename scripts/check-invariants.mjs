@@ -4,7 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { noteAfterAct, noteFromLook } from "../src/note.ts";
-import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse } from "../src/outline.ts";
+import { countOutlineNodes, foldToBudget, graftScopedOutline, nodeByRef, parseLookResponse, renderInteractiveControls } from "../src/outline.ts";
 import { shouldPreferForegroundModalWindow } from "../src/root-selection.ts";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
@@ -184,6 +184,13 @@ check("INV-11 unified agent contract", () => {
 	assert(JSON.stringify(tools) === JSON.stringify(expected), `unexpected public tool surface: ${tools.join(", ")}`);
 	assert(!extension.includes('executionMode: "sequential"'), "computer-use tools remain globally sequential");
 	assert(extension.includes("Required state id owning every @e ref"), "state-scoped ref contract is missing");
+});
+
+check("INV-11a compact observe view", () => {
+	const extension = fs.readFileSync(path.join(root, "extensions/computer-use.ts"), "utf8");
+	assert(extension.includes('detail: Type.Optional(Type.Union([Type.Literal("compact"), Type.Literal("outline")]'), "observe_ui does not declare detail compact|outline");
+	assert(ts.includes("function renderStateView") && (ts.match(/renderStateView\(/g) ?? []).length >= 4 && (ts.match(/waitForViewText\(/g) ?? []).length >= 3, "full views do not route through renderStateView");
+	assert(/`Controls \([^`]*stateId \$\{stateId\}, root \$\{outline\.root\.ref\}/.test(ts), "controls header does not show stateId and root ref");
 });
 
 check("INV-12 parallel native transports", () => {
@@ -560,6 +567,15 @@ async function liveChecks() {
 			for (const line of foldedLines) assert(/▸ \(\d+/.test(line), `folded line lacks count: ${line}`);
 			assert(folded.nodeCount === countOutlineNodes(parsed.root), `node count mismatch ${folded.nodeCount}`);
 			assert(folded.fullUnfoldLineCount === folded.nodeCount, "full unfold count differs from total nodes");
+		});
+		check("LIVE compact controls resolve against full outline", () => {
+			const parsed = parseLookResponse(look).parsedOutline;
+			const controls = renderInteractiveControls(parsed);
+			for (const ref of controls.renderedRefs) assert(nodeByRef(parsed, ref), `compact ref ${ref} does not resolve`);
+			for (const focused of parsed.nodes.filter((node) => node.focused)) {
+				assert(controls.renderedRefs.includes(focused.ref), `focused ref ${focused.ref} was not rendered by compact view`);
+			}
+			assert(controls.nodeCount === countOutlineNodes(parsed.root), `compact node count mismatch ${controls.nodeCount}`);
 		});
 		const fullOutline = parseLookResponse(look).parsedOutline;
 		const truncated = fullOutline?.nodes.find((node) => node.truncated && node.wireRef);

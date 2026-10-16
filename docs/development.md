@@ -9,7 +9,7 @@ src/actions.ts                   Action preparation and result reconciliation
 src/runtime.ts                   Immutable state store and resource scheduler
 src/state.ts                     Saved UI state ownership and restoration
 src/view.ts                      Stable refs and resulting-state change views
-src/outline.ts                   Outline parsing, folding, search, and ref mapping
+src/outline.ts                   Outline parsing, folding, control lists, search, and ref mapping
 src/note.ts                      Disposable running-note generation
 native/macos/bridge.swift        macOS helper for AX, capture, permissions, and input
 native/macos/activity_glow.swift macOS activity indicator windows and client ownership
@@ -44,7 +44,7 @@ npm run build:native
 
 The runtime is state-scoped and outline-first:
 
-- `observe_ui` returns a folded UI outline and running note.
+- `observe_ui` returns a compact control list and running note; `detail: "outline"` returns the folded outline.
 - `search_ui`, `expand_ui`, and `inspect_ui` provide progressive disclosure.
 - `act_ui` is the only public desktop action entrypoint.
 - UI observations are immutable records; request-local hydration replaces global current state.

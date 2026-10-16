@@ -11,9 +11,9 @@ import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypre
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { normalizeFindParams } from "./find-params.ts";
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
-import { foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
+import { controlLine, foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, renderInteractiveControls, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineDiff, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
 import { applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
-import { AGENT_TOOL_NAMES, type ActParams, type EvaluateBrowserParams, type ExpandUiParams, type ImageMode, type InspectUiParams, type LaunchBrowserParams, type FindParams, type NavigateBrowserParams, type ObserveParams, type ObserveTargetParams, type ReadTextParams, type RootSelector, type SearchUiParams, type UiAction, type WaitForParams } from "./contract.ts";
+import { AGENT_TOOL_NAMES, type ActParams, type EvaluateBrowserParams, type ExpandUiParams, type ImageMode, type InspectUiParams, type LaunchBrowserParams, type FindParams, type NavigateBrowserParams, type ObserveDetail, type ObserveParams, type ObserveTargetParams, type ReadTextParams, type RootSelector, type SearchUiParams, type UiAction, type WaitForParams } from "./contract.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
 import type { FramePoints, HelperActPerformed, HelperActResult, NativeInputDelivery, PlatformActRequest, PlatformApp as HelperApp, PlatformDiagnostics, PlatformFrontmostResult as FrontmostResult, PlatformRoot as HelperWindow } from "./platform/types.ts";
@@ -94,6 +94,7 @@ interface ComputerUseDetails {
 	changes?: OutlineChange[];
 	viewReason?: "root_replaced" | "change_budget_exceeded" | "identity_confidence_low";
 	renderedOutline?: string;
+	detail?: ObserveDetail;
 	outline?: SerializedOutline;
 	note?: WindowNote;
 	activation: ActivationFlags;
@@ -188,6 +189,7 @@ interface BrowserObservationDetails {
 	root: { ref: string; kind: "browser_page"; title: string; url: string };
 	outline: SerializedOutline;
 	renderedOutline: string;
+	detail?: ObserveDetail;
 }
 
 interface EvaluateBrowserDetails {
@@ -310,7 +312,7 @@ const runtimeState: RuntimeState = {
 };
 
 const savedStates = new SavedStates();
-export const testing = { runInOperation: <T>(fn: () => T): T => savedStates.operations.run({}, fn) };
+export const testing = { runInOperation: <T>(fn: () => T, state: OperationState = {}): T => savedStates.operations.run(state, fn), buildToolResult, browserObservationResult, waitForViewText, performSearchUi };
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -1025,6 +1027,18 @@ async function captureCurrentTarget(signal?: AbortSignal, readText: "auto" | "al
 	};
 }
 
+function renderStateView(outline: Outline, stateId: string, detail: ObserveDetail, reason?: string): { detail: ObserveDetail; text: string } {
+	const reasonText = reason ? `, full view: ${reason}` : "";
+	const controls = detail === "compact" ? renderInteractiveControls(outline) : undefined;
+	if (controls?.controlCount) {
+		const unlabeled = controls.omittedUnlabeled ? `, including ${controls.omittedUnlabeled} unlabeled control${controls.omittedUnlabeled === 1 ? "" : "s"}` : "";
+		const footer = `… ${controls.nodeCount - controls.renderedRefs.length} other nodes hidden${unlabeled}. Use search_ui to find more; expand_ui({ stateId: "${stateId}", ref: "${outline.root.ref}", depth: 2 }) or observe_ui detail "outline" for structure.`;
+		return { detail, text: `Controls (${controls.renderedRefs.length} of ${controls.nodeCount} nodes, stateId ${stateId}, root ${outline.root.ref}${reasonText}):\n${controls.text}\n${footer}` };
+	}
+	const folded = foldToBudget(outline);
+	return { detail: "outline", text: `Outline (${folded.nodeCount} nodes, stateId ${stateId}${reasonText}${controls ? ", no actionable controls found" : ""}${folded.truncated ? ", folded output truncated" : ""}):\n${folded.text}` };
+}
+
 async function buildToolResult(
 	tool: string,
 	summary: string,
@@ -1033,12 +1047,14 @@ async function buildToolResult(
 	_signal?: AbortSignal,
 	imageMode: ImageMode = operationState().currentImageMode ?? "auto",
 	base?: { stateId: string; outline: Outline },
+	detail: ObserveDetail = "compact",
 ): Promise<AgentToolResult<ComputerUseDetails>> {
 	const state = operationState();
 	const fallbackReason = imageFallbackReason(tool, result, imageMode);
 	const transition = base ? changesBetween(base.outline, result.outline) : undefined;
 	const useDiff = Boolean(transition && !transition.useFullView);
 	const folded = foldToBudget(result.outline);
+	const view = useDiff ? undefined : renderStateView(result.outline, result.capture.stateId, detail, transition?.reason);
 	const renderedNote = renderNote(state.currentNote);
 
 	const details: ComputerUseDetails = {
@@ -1066,6 +1082,7 @@ async function buildToolResult(
 		changes: useDiff ? transition?.changes : undefined,
 		viewReason: transition?.useFullView ? transition.reason : undefined,
 		renderedOutline: folded.text,
+		detail: view?.detail,
 		outline: serializeOutline(result.outline),
 		note: state.currentNote,
 		activation: result.activation,
@@ -1092,9 +1109,9 @@ async function buildToolResult(
 	// The model must echo capture.stateId into follow-up tools. Exposing only the
 	// helper-internal lookId here makes a plausible but invalid stateId easy to use.
 	const renderedChanges = useDiff ? renderChanges(transition!.changes) : "";
-	const outlineText = useDiff
-		? `\n\nChanges (${transition!.changedNodeCount}, ${base!.stateId} → ${result.capture.stateId}):\n${renderedChanges || "(no element changes)"}\nUse stateId ${result.capture.stateId} for subsequent actions and queries.`
-		: `\n\nOutline (${folded.nodeCount} nodes, stateId ${result.capture.stateId}${transition?.reason ? `, full view: ${transition.reason}` : ""}${folded.truncated ? ", folded output truncated" : ""}):\n${folded.text}`;
+	const outlineText = view
+		? `\n\n${view.text}`
+		: `\n\nChanges (${transition!.changedNodeCount}, ${base!.stateId} → ${result.capture.stateId}):\n${renderedChanges || "(no element changes)"}\nUse stateId ${result.capture.stateId} for subsequent actions and queries.`;
 	const fallbackText = fallbackReason ? `\n\n${fallbackReason.message}` : "";
 	const deltaText = rootDeltaLines(execution).join("\n");
 	const content: AgentToolResult<ComputerUseDetails>["content"] = [{ type: "text", text: `${summary}${deltaText ? `\n${deltaText}` : ""}${consoleText}${noteText}${outlineText}${fallbackText}` }];
@@ -1378,17 +1395,18 @@ async function withBrowserWrite<T>(contextId: string, work: () => Promise<T>): P
 	return result.value;
 }
 
-function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }): AgentToolResult<BrowserObservationDetails> {
+function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }, detail: ObserveDetail = "compact"): AgentToolResult<BrowserObservationDetails> {
 	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", snapshot: browser, outline: browser.outline } });
 	const currentOutline = restoreOutline(browser.outline);
 	const transition = base ? changesBetween(restoreOutline(base.outline), currentOutline) : undefined;
 	const useDiff = Boolean(transition && !transition.useFullView);
 	const folded = foldToBudget(currentOutline);
+	const view = useDiff ? undefined : detail === "outline" ? { detail, text: folded.text } : renderStateView(currentOutline, browser.snapshotId, detail);
 	const root = { ref: storeBrowserRootRef(browser.contextId), kind: "browser_page" as const, title: browser.title, url: browser.url };
-	const details: BrowserObservationDetails = { tool, kind: "browser_page", stateId: browser.snapshotId, baseStateId: base?.stateId, view: useDiff ? "diff" : "full", changes: useDiff ? transition?.changes : undefined, root, outline: browser.outline, renderedOutline: folded.text };
-	const viewText = useDiff
-		? `Changes (${transition!.changedNodeCount}, ${base!.stateId} → ${browser.snapshotId}):\n${renderChanges(transition!.changes) || "(no element changes)"}\nUse stateId ${browser.snapshotId} for subsequent actions and queries.`
-		: folded.text;
+	const details: BrowserObservationDetails = { tool, kind: "browser_page", stateId: browser.snapshotId, baseStateId: base?.stateId, view: useDiff ? "diff" : "full", changes: useDiff ? transition?.changes : undefined, root, outline: browser.outline, renderedOutline: folded.text, detail: view?.detail };
+	const viewText = view
+		? view.text
+		: `Changes (${transition!.changedNodeCount}, ${base!.stateId} → ${browser.snapshotId}):\n${renderChanges(transition!.changes) || "(no element changes)"}\nUse stateId ${browser.snapshotId} for subsequent actions and queries.`;
 	return { content: [{ type: "text", text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.\n${viewText}` }], details };
 }
 
@@ -1517,6 +1535,10 @@ function conditionScopeNode(outline: Outline, condition: ReturnType<typeof valid
 	return scopeNode;
 }
 
+function waitForViewText(outline: Outline, stateId: string, transition: OutlineDiff): string {
+	return transition.useFullView ? renderStateView(outline, stateId, "compact").text : `${renderChanges(transition.changes) || "(no element changes)"}\nUse stateId ${stateId} for subsequent actions and queries.`;
+}
+
 async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Promise<AgentToolResult<WaitForDetails>> {
 	const contextId = operationState().contextId;
 	const condition = validateCondition(params);
@@ -1540,8 +1562,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 			const renderedOutline = foldToBudget(successorOutline).text;
 			const details: WaitForDetails = { tool: "wait_for", stateId: lastSnapshot.snapshotId, baseStateId: baseSnapshot.snapshotId, view: useDiff ? "diff" : "full", changes: useDiff ? transition.changes : undefined, found, gone: found && gone || undefined, timedOut, nodeCount: lastSnapshot.targets.length, text, role, value, scopeRef, outline: lastSnapshot.outline, renderedOutline };
 			const message = found ? (gone ? "Condition disappeared." : "Condition appeared.") : `Timed out after ${timeoutMs}ms waiting for condition.`;
-			const viewText = useDiff ? `${renderChanges(transition.changes) || "(no element changes)"}\nUse stateId ${lastSnapshot.snapshotId} for subsequent actions and queries.` : renderedOutline;
-			return { content: [{ type: "text", text: `${message}\n${viewText}` }], details };
+			return { content: [{ type: "text", text: `${message}\n${waitForViewText(successorOutline, lastSnapshot.snapshotId, transition)}` }], details };
 		};
 		do {
 			const scheduled = await resourceScheduler.read(state.resourceKey, async () => await cdpSnapshotForContext(contextId));
@@ -1596,8 +1617,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		renderedOutline: foldToBudget(refreshed.outline).text,
 	};
 	const message = details.found ? (details.gone ? "Condition disappeared." : "Condition appeared.") : `Timed out after ${timeoutMs}ms waiting for condition.`;
-	const viewText = useDiff ? `${renderChanges(transition.changes) || "(no element changes)"}\nUse stateId ${refreshed.capture.stateId} for subsequent actions and queries.` : details.renderedOutline;
-	return { content: [{ type: "text", text: `${message}\n${viewText}` }], details };
+	return { content: [{ type: "text", text: `${message}\n${waitForViewText(refreshed.outline, refreshed.capture.stateId, transition)}` }], details };
 }
 
 function sameRootIdentity(a: CurrentTarget, b: CurrentTarget): boolean {
@@ -1618,7 +1638,7 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 		const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(browserContextId));
 		const browser = scheduled.value;
 		if (!browser) throw new Error(`Browser context '${browserContextId}' is no longer available. Call find_roots again.`);
-		return browserObservationResult(browser, resourceKey, scheduled.epoch, "observe_ui");
+		return browserObservationResult(browser, resourceKey, scheduled.epoch, "observe_ui", undefined, params.detail);
 	}
 	const state = operationState();
 	const mode = params.mode ?? "fused";
@@ -1647,7 +1667,7 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 		);
 	}
 	const summary = `Observed ${mode} ${captureResult.target.windowRef ? `${captureResult.target.windowRef} ` : ""}${captureResult.target.appName} — ${captureResult.target.windowTitle}. Returned the latest outline state.`;
-	return await buildToolResult("observe_ui", summary, captureResult, executionTrace("look", "stealth"), signal, imageMode);
+	return await buildToolResult("observe_ui", summary, captureResult, executionTrace("look", "stealth"), signal, imageMode, undefined, params.detail);
 }
 
 function currentOutlineOrThrow(stateId?: string): Outline {
@@ -1695,7 +1715,8 @@ async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Pr
 	}
 	const detailMatches = matches.map(serializeOutlineSearchMatch);
 	const details: OutlineToolDetails = { tool: "search_ui", stateId: state.currentCapture?.stateId, lookId: outline.lookId, matches: detailMatches, totalMatches: ranked.totalMatches, returned: matches.length, hasMore: ranked.totalMatches > matches.length, note: state.currentNote };
-	const lines = matches.map((match) => `${match.ref} ${match.role || "Unknown"} ${JSON.stringify(match.label || "(unlabeled)")} [${match.matchReason}${match.matchReason === "fuzzy" ? ` ${match.score?.toFixed(2)}` : ""}]\n  path: ${match.path}`);
+	const collides = (match: OutlineSearchMatch) => matches.some((other) => other !== match && other.role === match.role && other.label === match.label);
+	const lines = matches.map((match) => `${controlLine(match.node)} [${match.matchReason}${match.matchReason === "fuzzy" ? ` ${match.score?.toFixed(2)}` : ""}]${collides(match) ? `\n  path: ${match.path}` : ""}`);
 	const noteHeader = renderNote(state.currentNote);
 	const noteText = noteHeader ? `${noteHeader}\n\n` : "";
 	const escalationText = escalatedOCR ? " OCR text was escalated for this search after the cached outline had no matches." : "";
