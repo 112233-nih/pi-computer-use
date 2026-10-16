@@ -1251,7 +1251,13 @@ final class Bridge {
 		ensureEnhancedAccessibility(pid: pid)
 		let appElement = AXUIElementCreateApplication(pid)
 		AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
-		let windows = Array(axElementArray(appElement, attribute: kAXWindowsAttribute as CFString).prefix(128))
+		var windows = Array(axElementArray(appElement, attribute: kAXWindowsAttribute as CFString).prefix(128))
+		if windows.isEmpty {
+			for attribute in [kAXMainWindowAttribute, kAXFocusedWindowAttribute] {
+				guard let window = copyAttribute(appElement, attribute: attribute as CFString).flatMap(asAXElement), !windows.contains(where: { sameElement($0, window) }) else { continue }
+				windows.append(window)
+			}
+		}
 		let candidates = cgWindowCandidates(pid: pid, entries: cgEntries)
 		let pairings = windowPairings(windows: windows, candidates: candidates)
 

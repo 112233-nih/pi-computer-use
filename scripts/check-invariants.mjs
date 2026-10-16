@@ -262,6 +262,7 @@ check("INV-20 bounded broad root discovery", () => {
 	assert(swift.includes("if let pid {\n\t\t\tapps = [[\"pid\": Int(pid)]]"), "explicit-pid root discovery no longer stays immediate");
 	assert(swift.includes("popupCandidates.isEmpty ? [] : openMenuElements"), "root discovery traverses menus when no popup exists");
 	assert(!swift.includes("let menuPairings = windowPairings(windows: menuElements, candidates: popupCandidates)"), "root discovery includes unrelated menu-pairing changes");
+	assert(/if windows\.isEmpty \{\s*for attribute in \[kAXMainWindowAttribute, kAXFocusedWindowAttribute\]/.test(swift), "root discovery drops windows that AXWindows omits");
 	assert(ts.includes("async function windowDetailsForFind"), "find_roots lacks an explicit root-acquisition boundary");
 	assert(/if \(!query\.app && !query\.bundleId && !Number\.isFinite\(query\.pid\)\)[\s\S]{0,160}listRoots\(\{\}, signal\)/.test(ts), "broad find_roots does not use one platform listRoots call");
 	assert(ts.includes("return await collectWindowDetails(apps, config, signal)"), "filtered find_roots does not retain per-app discovery");
